@@ -41,20 +41,17 @@ from paddlenlp.quantization.quantization_linear import (
 import paddleslim
 from paddleslim.quant.advanced import GPTQ
 from paddleslim.common.wrapper_function import FuncWrapper
+from paddleslim.quant.configure.conf_utils import prepare_qconfig
 
 from quant_utils import (
     init_params,
-    _clear_params,
-    prepare_qconfig,
     get_scales,
     save_scales,
     save_moe_quant_w4a8_model,
-    get_ptq_params,
     apply_gptq,
     show_progress,
-    load_sharded_checkpoint
 )
-from custom_attention import QuantizedCustomAttentionLayer
+from utils import offload_params, _clear_params, load_sharded_checkpoint, load_params_from_cpu
 
 def get_mean_scale_for_moe(act_scales, num_experts=128):
     new_act_scales={}
@@ -152,7 +149,7 @@ def apply_block_gptq(model, predictor, ptq_dials, tgt_dials, args):
             # get embedding output
             logger.debug("Getting Embedding Output")
             if args.lazy_load:
-                init_params(sub_layer, state_dict, sub_name, args.dtype)
+                load_params_from_cpu(sub_layer, sub_name, state_dict, args.dtype)
                 logger.debug(f"{sub_name} init params done")
             in_tokens = []
             for count, text in enumerate(ptq_dials):
@@ -218,7 +215,7 @@ def apply_block_gptq(model, predictor, ptq_dials, tgt_dials, args):
 
             if args.lazy_load:
                 layer_name = 'layers.' + sub_name.split('.')[-1]
-                init_params(sub_layer, state_dict, sub_name, args.dtype)
+                load_params_from_cpu(sub_layer, sub_name, state_dict, args.dtype)
                 logger.info(f"{layer_name} init done")
 
             cur_layer_outputs = []
@@ -279,7 +276,7 @@ def apply_block_gptq(model, predictor, ptq_dials, tgt_dials, args):
             sub_layer = ptq.convert(sub_layer, inplace=True)
 
             if args.lazy_load:
-                ptq_state_dict = get_ptq_params(sub_layer, ptq_state_dict, sub_name) 
+                ptq_state_dict.extend(offload_params(sub_layer, sub_name))
 
             for cur_layer_name, cur_layer in sub_layer.named_sublayers():
                 if type(cur_layer) in [ColumnParallelQuantizationLinear, QuantizationLinear, RowParallelQuantizationLinear]:

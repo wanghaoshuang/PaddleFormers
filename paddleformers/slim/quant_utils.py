@@ -84,227 +84,19 @@ from paddleslim.quant.observers.avg_headwise import AvgHeadwiseObserverLayer
 from paddleslim.quant.observers.kcache_channelwise import KCacheChannelWiseObserverLayer
 from paddleslim.quant.observers.asym_cachekv import AsymCacheKVObserverLayer
 from paddleslim.quant.observers.abs_max_tokenwise import AbsmaxTokenwiseObserverLayer
+from paddleslim.quant.configure.conf_utils import prepare_qconfig
 import paddle.distributed as dist
 
-def load_sharded_checkpoint(folder, variant=None, return_numpy=False):
-    """
 
-    This load is performed efficiently: each checkpoint shard is loaded one by one in RAM and deleted after being
-    loaded in the model.
+WEIGHT_OBSERVERS = [AbsMaxChannelWiseWeightObserverLayer, GroupWiseWeightObserverLayer]
+ACTIVATION_OBSERVERS = [AbsmaxObserverLayer, TokenQuantileObserverLayer, AbsmaxTokenwiseObserverLayer]
+CACHEKV_OBSERVERS = [AvgHeadwiseObserverLayer, KCacheChannelWiseObserverLayer, AsymCacheKVObserverLayer]
 
-    Args:
-        folder (`str` or `os.PathLike`): A path to a folder containing the sharded checkpoint.
-        variant (`str`): The model variant.
-
-    """
-    # Load the index
-    pdparams_file = os.path.join(folder, _add_variant("model_state.pdparams", variant))
-    lora_pdparams_file = os.path.join(folder, _add_variant("lora_model_state.pdparams", variant))
-    safetensors_file = os.path.join(folder, _add_variant("model.safetensors", variant))
-    if os.path.isfile(pdparams_file):
-        return paddle.load(pdparams_file, return_numpy=return_numpy)
-    if os.path.isfile(lora_pdparams_file):
-        return paddle.load(lora_pdparams_file, return_numpy=return_numpy)
-    if os.path.isfile(safetensors_file):
-        try:
-            from paddlenlp.utils.safetensors import fast_load_file as safe_load_file
-        except:
-            from safetensors.numpy import load_file as safe_load_file
-
-        state_dict = safe_load_file(safetensors_file)
-        if not return_numpy:
-            for key in list(state_dict.keys()):
-                if isinstance(state_dict[key], np.ndarray):
-                    state_dict[key] = paddle.Tensor(state_dict.pop(key), zero_copy=True)
-        return state_dict
-
-    index_file = os.path.join(folder, _add_variant(PADDLE_WEIGHTS_INDEX_NAME, variant))
-    safe_index_file = os.path.join(folder, _add_variant(SAFE_WEIGHTS_INDEX_NAME, variant))
-    safe_master_file = os.path.join(folder, _add_variant(SAFE_MASTER_WEIGHTS_INDEX_NAME, variant))
-    safe_peft_file = os.path.join(folder, _add_variant(SAFE_PEFT_WEIGHTS_INDEX_NAME, variant))
-
-    index_present = os.path.isfile(index_file)
-    safe_index_present = os.path.isfile(safe_index_file)
-    safe_master_present = os.path.isfile(safe_master_file)
-    safe_peft_present = os.path.isfile(safe_peft_file)
-
-    load_safe = False
-    load_index = None
-    if safe_index_present:
-        load_safe = True  # load safe due to preference
-        load_index = safe_index_file
-    elif safe_master_present:
-        load_safe = True
-        load_index = safe_master_file
-    elif index_present:
-        load_index = index_file
-    elif safe_peft_present:
-        load_safe = True
-        load_index = safe_peft_file
-    else:
-        raise ValueError(f"Could not find {index_file} or {safe_index_file} or {safe_peft_file}")
-
-    if load_safe:
-        try:
-            from paddlenlp.utils.safetensors import fast_load_file as safe_load_file
-        except:
-            from safetensors.numpy import load_file as safe_load_file
-
-    with open(load_index, "r", encoding="utf-8") as f:
-        index = json.load(f)
-
-    shard_files = list(set(index["weight_map"].values()))
-    loader = safe_load_file if load_safe else partial(paddlenlp_load, map_location="np" if return_numpy else "cpu")
-
-    ret = {}
-    for shard_file in tqdm(shard_files):
-        state_dict = loader(os.path.join(folder, shard_file))
-        ret.update(state_dict)
-
-    if not return_numpy:
-        for key in list(ret.keys()):
-            if isinstance(ret[key], np.ndarray):
-                ret[key] = paddle.Tensor(ret.pop(key), zero_copy=True)
-
-    return ret
-
-
-def show_progress(start, idx, steps):
-    """
-    Show progress
-    """
-    c = idx / steps * 100
-    a = "*" * int(c)
-    b = "·" * (100 - int(c))
-    dur = time.perf_counter() - start
-    logger.info("\r{:.2f}%[{}->{}] Cost time {:.2f}s".format(c, a, b, dur))
-    time.sleep(0.1)
-
-
-def get_ptq_params(model, ptq_state_dict, sub_name):
-    """
-    Get ptq params from quant model
-    """
-    for name, param in model.named_parameters():
-        full_name = sub_name + "." + name
-        ptq_state_dict[full_name] = np.array(param.value().get_tensor())
-    return ptq_state_dict
-
-@paddle.no_grad()
-def _clear_params(model, state_dict=None, sub_name=None):
-    """
-    Clear params
-    """
-    for k, v in model.state_dict().items():
-        # 清除参数的值
-        v.value().get_tensor()._clear()
-        # if state_dict is not None:
-        #     拼接参数名
-        #    name = sub_name + "." + k
-        #    if name in state_dict:
-        #     如果拼接后的参数名在state_dict中存在
-        #    if name in state_dict:
-        #            从state_dict中删除该参数
-        #        del state_dict[sub_name + "." + k]
-
-
-def init_params(sub_layer, state_dict, sub_name, dtype):
-    """
-    Init params and set state_dict
-    """
-    new_dict = {}
-    for k, v in state_dict.items():
-        if sub_name in k:
-            weight_name = k.replace(sub_name + ".", "")
-            # load from numpy, so we need to convert to bfloat16 firstly and then cast to other dtype
-            new_dict[weight_name] = paddle.to_tensor(v, dtype='bfloat16').cast(dtype).cuda()
-    for k, v in sub_layer.state_dict().items():
-        if not v._is_initialized():
-            v.get_tensor()._share_data_with(new_dict[k].get_tensor())
-    sub_layer.set_state_dict(new_dict)
- 
-
-def prepare_qconfig(args):
-    """
-    Prepare qconfig
-    """
-    if 'C8' in args.quant_type:
-        quant_type = args.quant_type.replace('C8', '')
-        cachekv_quant = True
-        cachekv_quant_bits = 8
-    elif 'C4' in args.quant_type:
-        quant_type = args.quant_type.replace('C4', '')
-        cachekv_quant = True
-        cachekv_quant_bits = 4
-    elif 'C2' in args.quant_type:
-        quant_type = args.quant_type.replace('C2', '')
-        cachekv_quant = True
-        cachekv_quant_bits = 2
-    else:
-        quant_type = args.quant_type.replace('C16', '')
-        cachekv_quant = False
-
-    q_config = QuantConfig(activation=None, weight=None)
-    if quant_type == "W8A8":
-        activation = AbsmaxObserver(quant_bits=8)
-        weight = AbsMaxChannelWiseWeightObserver(quant_bits=8)
-    elif quant_type in ["WINT4", "W4A16"]:
-        activation = None
-        weight = GroupWiseWeightObserver(quant_bits=4, group_size=args.group_size)
-    elif quant_type in ["WINT8", "W8A16"]:
-        activation = None
-        weight = AbsMaxChannelWiseWeightObserver(quant_bits=8)
-    elif quant_type == "W4A8":
-        activation = AbsmaxObserver(quant_bits=8)
-        weight = AbsMaxChannelWiseWeightObserver(quant_bits=4)
-    else:
-        raise ValueError("quant_type should be in ['W8A8', 'WINT4', 'WINT8', 'W4A8', 'W4A16', 'W8A16']")
- 
-    q_config.add_qat_layer_mapping(ColumnParallelLinear, QuantizedColumnParallelLinear)
-    q_config.add_qat_layer_mapping(RowParallelLinear, QuantizedRowParallelLinear)
-
-    cachekv = None
-    if cachekv_quant: 
-        if cachekv_quant_bits == 8:
-            cachekv = [AvgHeadwiseObserver(quant_bits=cachekv_quant_bits, moving_avg=True, quant_axis=1,do_fp8_quant=True),
-            AvgHeadwiseObserver(quant_bits=cachekv_quant_bits, moving_avg=True, quant_axis=1,do_fp8_quant=True)]
-            # cachekv = [KCacheChannelWiseObserver(quant_bits=cachekv_quant_bits, symmetric=True), \
-            #         KCacheChannelWiseObserver(quant_bits=cachekv_quant_bits, symmetric=True)]
-            q_config.add_qat_layer_mapping(FuncWrapper, QuantizedCustomAttentionLayer)
-        elif cachekv_quant_bits == 4:
-            if args.abq:
-                cachekv = [AsymCacheKVObserver(quant_bits=cachekv_quant_bits, symmetric=False, quant_axis=[1, 3]), \
-                    AsymCacheKVObserver(quant_bits=cachekv_quant_bits, symmetric=False, quant_axis=[1, 3])]
-            else:
-                cachekv = [KCacheChannelWiseObserver(quant_bits=cachekv_quant_bits, symmetric=False), \
-                    KCacheChannelWiseObserver(quant_bits=cachekv_quant_bits, symmetric=False)]
-            q_config.add_qat_layer_mapping(FuncWrapper, QuantizedCustomAttentionLayer)
-        else:
-            raise ValueError('cachekv_quant_bits should be 8 or 4, 2bit is not supported for now.')
-    return activation, weight, cachekv, q_config
-
- 
 def get_scales(model, act_scales, weight_scales, cachekv_scales, 
                dp_degree=1, mp_degree=1, mp_id=0, best_quant_policies=None):
     """
     get scales
     """
-    def gather_scale(cur_layer, dp_degree, mp_degree, mp_id):
-        scale = cur_layer.scales()
-        if dp_degree > 1:
-            scale_list = []
-            paddle.distributed.all_gather(scale_list, scale)
-            gathered_scale = paddle.concat(
-                            [
-                                paddle.reshape_(
-                                    scale_list[r * mp_degree + mp_id],
-                                    shape=[1] + scale_list[r * mp_degree + mp_id].shape) for r in range(dp_degree)
-                            ],
-                            axis=0).max(axis=0, keepdim=False)
-            paddle.assign(gathered_scale, cur_layer._scale)
-            return gathered_scale
-        else:
-            return scale
     
     def gather_min_max(cur_layer, max_values, min_values, dp_degree, mp_degree, mp_id, quant_bits):
         bnt = (1 << (quant_bits - 1)) - 1
@@ -342,6 +134,13 @@ def get_scales(model, act_scales, weight_scales, cachekv_scales,
     for cur_name, cur_layer in model.named_sublayers():
         if 'layer.' in cur_name:
             cur_name = cur_name.replace('layer.', '')
+        if isinstance(cur_layer, WEIGHT_OBSERVERS):
+            weight_scales[cur_name] = cur_layer.gather_scale().cast("float32").numpy().tolist()
+        elif isinstance(cur_layer, ACTIVATION_OBSERVERS):
+            act_scales[cur_name] = float(scale.cast("float32"))
+
+
+
         if type(cur_layer) in [AbsMaxChannelWiseWeightObserverLayer, GroupWiseWeightObserverLayer] \
                 and "_observer" not in cur_name:
             scale = gather_scale(cur_layer, dp_degree, mp_degree, mp_id)
