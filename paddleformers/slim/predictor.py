@@ -287,13 +287,7 @@ def create_predictor(
                     with paddle.no_grad():
                         model = AutoModelForCausalLM.from_pretrained(
                             predictor_args.model_name_or_path,
-                            dtype=predictor_args.dtype, 
-                            convert_from_hf=True, 
-                            use_flash_attention=predictor_args.use_flash_attention,
-                            tensor_parallel_degree=tensor_parallel_degree,
-                            tensor_parallel_rank=tensor_parallel_rank,
-                            tensor_parallel_output=False,
-                        )
+                            convert_from_hf=True,)
     predictor = AutoPredictor.create_predictor(predictor_args, config, model_args, tokenizer, model=model, **kwargs)
 
     return predictor

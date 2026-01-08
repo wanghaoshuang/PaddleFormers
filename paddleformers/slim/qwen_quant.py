@@ -20,7 +20,8 @@ from paddleformers.trainer.argparser import PdArgumentParser
 from paddleformers.trl import llm_utils
 from paddleformers.utils.log import logger
 
-from gradual_block_quant import apply_block_gptq
+# from gradual_block_quant import apply_block_gptq
+from quant_utils import apply_ptq
 from quant_utils import load_quant_model
 
 from arguments import PredictorArgument, ModelArgument
@@ -54,7 +55,8 @@ def predict():
     if predictor_args.load_quant_path:
         load_quant_model(predictor.model, predictor_args, None, [])
     else:
-        apply_block_gptq(predictor.model, predictor, batch_source_texts, batch_target_texts, predictor_args)
+        # apply_block_gptq(predictor.model, predictor, batch_source_texts, batch_target_texts, predictor_args)
+        apply_ptq(predictor.model, predictor, predictor_args, batch_source_texts, [])
     if predictor_args.benchmark:
         benchmark(predictor, predictor_args, model_args)
 

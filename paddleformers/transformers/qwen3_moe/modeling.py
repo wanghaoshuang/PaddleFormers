@@ -155,6 +155,14 @@ class Qwen3MoeAttention(nn.Layer):
             norm_eps=config.rms_norm_eps,
             input_is_parallel=self.tensor_parallel,
         )  # thus post q_norm does not need reshape
+        self.set_attn_func()
+
+    def set_attn_func(self):
+        config = self.config
+        self.attn_func = ALL_ATTENTION_FUNCTIONS[self.config._attn_implementation]
+        if config.cachekv_quant:
+            from paddleslim.common.wrapper_function import FuncWrapper
+            self.attn_func = FuncWrapper(self.attn_func)
 
     def forward(
         self,
@@ -221,7 +229,8 @@ class Qwen3MoeAttention(nn.Layer):
         if past_key_values is not None:
             key_states, value_states = past_key_values.update(key_states, value_states, self.layer_idx)
 
-        attention_interface = ALL_ATTENTION_FUNCTIONS[self.config._attn_implementation]
+
+        attention_interface = self.attn_func
 
         attn_output, attn_weights = attention_interface(
             self,

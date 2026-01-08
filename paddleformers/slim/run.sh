@@ -6,20 +6,20 @@ unset PADDLE_ELASTIC_TIMEOUT
 unset PADDLE_TRAINERS_NUM
 
 export DISTRIBUTED_TRAINER_ENDPOINTS=`hostname -i`
-export PYTHONPATH="/root/paddlejob/workspace/env_run/output/wangna11/PaddleFormers/third_party/PaddleNLP/":$PYTHONPATH
-export PYTHONPATH="/root/paddlejob/workspace/env_run/output/wangna11/PaddleFormers/third_party/PaddleSlim/":$PYTHONPATH
-export LD_LIBRARY_PATH=/root/paddlejob/workspace/env_run/output/wangna11/miniconda3/envs/qwen/lib/python3.10/site-packages/nvidia/cudnn/lib/:$LD_LIBRARY_PATH
+export PYTHONPATH="/root/paddlejob/workspace/env_run/output/wangna/PaddleFormers/third_party/PaddleNLP/":$PYTHONPATH
+export PYTHONPATH="/root/paddlejob/workspace/env_run/output/whs/PaddleSlim/":$PYTHONPATH
+export LD_LIBRARY_PATH=/root/paddlejob/workspace/env_run/output/whs/miniconda3/envs/qwen/lib/python3.10/site-packages/nvidia/cudnn/lib/:$LD_LIBRARY_PATH
 export LOAD_STATE_DICT_THREAD_NUM=128
 export DISABLE_FASTER_SET_STATE_DICT=1 #---#
 
-export CUDA_VISIBLE_DEVICES=4,5,6,7
+export CUDA_VISIBLE_DEVICES=4
 
-model_name_or_path=Qwen/qwen30b_a3b_model_1119/
-data_path=/root/paddlejob/workspace/env_run/output/wangna11/wwb/sft_1119.jsonl
+model_name_or_path=Qwen/qwen30b_a3b_model_1119
+data_path=/root/paddlejob/workspace/env_run/output/whs/PaddleFormers/paddleformers/slim/Qwen/sft_1119.jsonl
 
 save_name=qwen30b_a3b_model_1_tmp
-log_dir=/root/paddlejob/workspace/env_run/output/wangna11/PaddleFormers/log_${save_name}
-save_path=/root/paddlejob/workspace/env_run/output/wangna11/PaddleFormers/output/${save_name}
+log_dir=/root/paddlejob/workspace/env_run/output/whs/PaddleFormers/paddleformers/slim/log_${save_name}
+save_path=/root/paddlejob/workspace/env_run/output/whs/PaddleFormers/paddleformers/slim/output/${save_name}
 
 rm -rf ${log_dir}
 rm -rf ${save_path}

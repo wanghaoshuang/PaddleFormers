@@ -49,7 +49,6 @@ from paddleslim.quant.advanced import (
     PieceWiseSearch,
     SmoothSearchV2,
     Shift,
-    ReorderFFNWeight,
     Smooth,
     GPTQ,
     moe_shared_scale,
@@ -61,8 +60,8 @@ from paddleslim.quant.layers import (
     QuantizedRowParallelLinear
 )
 from paddleslim.common.wrapper_function import FuncWrapper
-from custom_attention import QuantizedCustomAttentionLayer
-from abq import AdaptiveBaggingQuant
+from paddleslim.quant.layers.custom_attention import QuantizedCustomAttentionLayer
+from paddleslim.quant.advanced.abq import AdaptiveBaggingQuant
 from paddleslim.quant.observers import (
     AbsMaxChannelWiseWeightObserver,
     AbsmaxObserver,
@@ -732,7 +731,8 @@ def apply_ptq(model, predictor, args, ptq_dials, skip_list_analysis):
     # calibration(predictor, ptq_dials, args,max_step=5)
     # gptq.fasterquant()
     # logger.info("-------------------GPTQ Done------------------")
-    dp_degree = args.data_parallel_degree
+    # dp_degree = args.data_parallel_degree
+    dp_degree = 1
     try:
         hcg = fleet.get_hybrid_communicate_group()
         rank = hcg.get_model_parallel_rank()
@@ -774,7 +774,8 @@ def apply_ptq(model, predictor, args, ptq_dials, skip_list_analysis):
     ptq = PTQ(q_config)
     model = ptq.quantize(model, inplace=True)
     args.token_clip=False
-
+    print(model)
+    return model
     if args.token_clip:
         apply_token_wise_clipping(model, predictor, args, None, ptq_dials, max_step=16)
 
